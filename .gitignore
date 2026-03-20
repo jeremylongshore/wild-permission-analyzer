@@ -1,0 +1,14 @@
+.dolt/
+*.db
+.beads/
+AGENTS.md
+Gemfile.lock
+vendor/bundle/
+.bundle/
+pkg/
+*.gem
+.rspec_status
+.idea/
+.vscode/
+*.swp
+*~
