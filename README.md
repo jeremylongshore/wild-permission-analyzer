@@ -2,7 +2,7 @@
 
 Static audit of capability-gate permission configs for the wild ecosystem.
 
-Part of the **[wild ecosystem](https://github.com/jeremylongshore/wild-rails-ai-ops)** — 10 Ruby gems for running AI agents inside Rails apps under capability control. See [`../CLAUDE.md`](../CLAUDE.md) for ecosystem-level guidance.
+Part of the **[wild ecosystem](https://github.com/intent-solutions-io/wild-rails-ai-ops)** — 10 Ruby gems for running AI agents inside Rails apps under capability control. See [`../CLAUDE.md`](../CLAUDE.md) for ecosystem-level guidance.
 
 ## What It Does
 
