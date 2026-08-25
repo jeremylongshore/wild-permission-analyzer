@@ -4,6 +4,8 @@ Static audit of capability-gate permission configs for the wild ecosystem.
 
 Part of the **[wild ecosystem](https://github.com/intent-solutions-io/wild-rails-ai-ops)** — 10 Ruby gems for running AI agents inside Rails apps under capability control. See [`../CLAUDE.md`](../CLAUDE.md) for ecosystem-level guidance.
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/U5S225PTME)
+
 ## What It Does
 
 `wild-permission-analyzer` is a Ruby gem that audits `capabilities.yml` and `grants.yml` files from [wild-capability-gate](https://github.com/jeremylongshore/wild-capability-gate) **before deployment**. It catches permission model mistakes statically so they never reach production.
