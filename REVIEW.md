@@ -44,15 +44,18 @@ disappear.**
 6. **Unbounded recursion or work.** `PrerequisiteAnalyzer#detect_cycle` recurses, bounded only by
    `@config.max_prerequisite_depth`. Removing or bypassing that guard turns a deep prerequisite chain
    into a `SystemStackError`. Any new config-driven traversal needs a bound.
-7. **New runtime dependencies.** The gemspec declares stdlib `yaml` only. Any `spec.add_dependency`,
-   or a non-stdlib `require` under `lib/`, is a defect. Note `Grant#expired?` calls `Date.parse` while
+7. **New runtime dependencies.** The gemspec declares exactly one dependency, the default gem
+   `yaml`. Any *additional* `spec.add_dependency`, or a non-stdlib `require` under `lib/`, is a defect. Note `Grant#expired?` calls `Date.parse` while
    nothing in `lib/` requires `date`: if a PR touches that path, `require 'date'` is the fix, not a gem.
-8. **Report leakage and output injection.** Findings copy `caller_id`, capability names, and grant
-   `context` out of the audited YAML into JSON and Markdown that land in CI artifacts and PR comments.
-   Flag serializing `grant.context` wholesale (arbitrary operator YAML, can carry environment detail
-   that should not travel), and flag interpolating a config string into Markdown cells or fences
-   without neutralizing pipes, backticks, and newlines, since a crafted capability name can forge
-   report structure.
+8. **Report leakage and output injection.** Findings copy `caller_id`, capability names, risk
+   levels, tags, and cycle paths out of the audited YAML into `Finding#evidence`, and `JsonExporter`
+   serializes that evidence hash wholesale. Grant `context` is loaded onto `Grant` and frozen there
+   but reaches no finding today, so the rule against it is preventive: flag any change that starts
+   serializing `grant.context` (arbitrary operator YAML, can carry environment detail that should not
+   travel). `MarkdownExporter#escape_md` neutralizes pipes and backticks but not newlines, so flag
+   any config string interpolated into a Markdown cell or fence without all three neutralized, since
+   a crafted capability name can forge report structure. Note both exporters only return a String:
+   the gem writes nothing, so where that output lands is the caller's choice.
 9. **Ordinary correctness.** Off-by-one coverage ratios, `caller_id` grouping that changes
    `CoverageReport` shape, `Finding#<=>` comparing anything but severity rank (callers rely on
    critical-first, AD-3), mutation of frozen collections, specs asserting on a mock not behavior.
@@ -62,7 +65,8 @@ disappear.**
 - **INV-1 read-only.** No code under `lib/` writes, deletes, or renames a file.
 - **INV-2 no execution.** No subprocess, shell, or `eval` of a config-derived string.
 - **INV-3 no network.** No HTTP, DNS, or socket calls. The gem must run in air-gapped CI.
-- **INV-4 safe YAML only.** `YAML.safe_load`, `permitted_classes: []`, aliases off.
+- **INV-4 safe YAML only.** `YAML.safe_load`, `permitted_classes: []`, aliases off (`aliases:` is
+  not passed, and it defaults to false).
 - **INV-5 structure raises, entries skip.** Missing file, invalid YAML, or a missing top-level
   `capabilities`/`grants` array raises `LoadError`; one malformed entry is skipped, never fatal (AD-4).
 - **INV-6 frozen configuration.** `freeze!` runs at the end of `configure`; later mutation raises
@@ -127,3 +131,144 @@ On a re-review after new pushes the bar does not rise: drop findings the update 
 invent objections on unchanged lines previously accepted. Prefer a few high-conviction findings.
 Never reproduce a suspected secret, name its location and the remediation. If the change is correct,
 invariant-preserving, and honestly described, reply `lgtm`.
+
+## Sources
+
+Every code-grounded claim above was checked against the working tree at commit `c8e4189`, the tip
+this pull request branch points at. Paths are repo-relative; a line range covers the whole construct
+named. If a cited line moves, re-verify the claim before trusting it.
+
+**Repo shape and gate**
+
+- Library gem, no Rails, no MCP, no ActiveRecord, no CLI: `wild-permission-analyzer.gemspec:1-25`,
+  `Gemfile:1-11` (no `bin/` or `exe/` directory exists, and the gemspec declares no executables)
+- Deterministic gate is rspec plus rubocop on Ruby 3.2 and 3.3: `.github/workflows/ci.yml:14`,
+  `.github/workflows/ci.yml:26`, `.github/workflows/ci.yml:29`
+- Six analyzers, findings plus per-caller coverage: `lib/wild_permission_analyzer/report/builder.rb:16-40`
+  (five finding analyzers at `:29-35`, `CoverageAnalyzer` at `:18` and `:38-40`)
+- Analyzers on disk: `consistency_analyzer.rb`, `risk_analyzer.rb`, `prerequisite_analyzer.rb`,
+  `coverage_analyzer.rb`, `orphan_analyzer.rb`, `shadow_analyzer.rb`, all under
+  `lib/wild_permission_analyzer/analyzers/`
+
+**Defect class 1, silent under-reporting**
+
+- Loaders drop malformed entries with `.compact`: `lib/wild_permission_analyzer/loaders/capabilities_loader.rb:19`,
+  `lib/wild_permission_analyzer/loaders/grants_loader.rb:19`
+- What counts as malformed: `capabilities_loader.rb:43`, `capabilities_loader.rb:54-56`,
+  `grants_loader.rb:42-45`
+
+**Defect class 2, thresholds and severities**
+
+- `RiskAnalyzer#risk_severity`, critical to `:critical` and high to `:error`:
+  `lib/wild_permission_analyzer/analyzers/risk_analyzer.rb:75-81`
+- `wildcard_risk_threshold` defaults to `medium`: `lib/wild_permission_analyzer/configuration.rb:14`
+- Threshold rank lookup with a `|| 2` fallback: `risk_analyzer.rb:12`
+- `elevated_caps` hardcoded rank floor of `2`: `risk_analyzer.rb:61-65`, floor on `:63`
+- `Configuration::DEFAULT_RISK_LEVELS` is low 1, medium 2, high 3, critical 4: `configuration.rb:5`
+
+**Defect class 3, WildcardMatcher**
+
+- `matches?`: `lib/wild_permission_analyzer/analyzers/wildcard_matcher.rb:12-17`
+- `Regexp.escape(pattern).gsub('\\*', '.*')`: `wildcard_matcher.rb:15`
+- `\A` and `\z` anchors: `wildcard_matcher.rb:16`
+- Patterns are config-supplied: `grants_loader.rb:49`, `wildcard_matcher.rb:21-25`
+
+**Defect class 4, read-only, no-exec, no-network posture**
+
+- The only filesystem call in `lib/` is `File.read`: `capabilities_loader.rb:25`, `grants_loader.rb:25`
+- Verified absent across `lib/`: `File.write`, `File.open`, `FileUtils`, `system`, `Open3`,
+  `Net::HTTP`, `URI.open`, `Socket`, `eval` (grep over `lib/`, zero hits)
+
+**Defect class 5, YAML**
+
+- `YAML.safe_load(content, permitted_classes: [])`: `capabilities_loader.rb:26`, `grants_loader.rb:26`
+- Rescue scope is `Errno::ENOENT` and `Psych::Exception` only: `capabilities_loader.rb:27-30`,
+  `grants_loader.rb:27-30`
+
+**Defect class 6, bounded recursion**
+
+- `PrerequisiteAnalyzer#detect_cycle`: `lib/wild_permission_analyzer/analyzers/prerequisite_analyzer.rb:53-63`
+- The depth guard: `prerequisite_analyzer.rb:54`
+- `max_prerequisite_depth` default of 10 and its validation: `configuration.rb:15`, `configuration.rb:53-60`
+
+**Defect class 7, dependencies**
+
+- The single declared dependency, the default gem `yaml`: `wild-permission-analyzer.gemspec:25`
+- Every non-relative `require` under `lib/` is stdlib: `json_exporter.rb:3-4`, `markdown_exporter.rb:3`,
+  `audit_report.rb:3`, `capabilities_loader.rb:3`, `grants_loader.rb:3`
+- `Grant#expired?` calls `Date.parse` with no `require 'date'` anywhere in `lib/`:
+  `lib/wild_permission_analyzer/models/grant.rb:22` (grep for `require 'date'` over `lib/`, zero hits)
+
+**Defect class 8, report content**
+
+- Finding evidence payloads: `risk_analyzer.rb:43-44`, `risk_analyzer.rb:57`,
+  `consistency_analyzer.rb:19`, `orphan_analyzer.rb:29`, `orphan_analyzer.rb:45`,
+  `prerequisite_analyzer.rb:31`, `prerequisite_analyzer.rb:84`, `shadow_analyzer.rb:48`
+- `JsonExporter` serializes the evidence hash wholesale:
+  `lib/wild_permission_analyzer/export/json_exporter.rb:28-35`, evidence on `:33`
+- `grant.context` exists and is frozen on the model but appears in no finding:
+  `models/grant.rb:6`, `models/grant.rb:11`, `grants_loader.rb:50` (grep for `context` over `lib/`
+  returns those three sites and nothing in any analyzer or exporter)
+- `MarkdownExporter#escape_md` handles pipes and backticks, not newlines:
+  `lib/wild_permission_analyzer/export/markdown_exporter.rb:85-87`
+- Exporters return a String and write nothing: `json_exporter.rb:14`, `markdown_exporter.rb:21`
+
+**Defect class 9, ordinary correctness**
+
+- `CoverageReport#coverage_ratio`: `lib/wild_permission_analyzer/models/coverage_report.rb:16-21`
+- `caller_id` grouping into one report per caller: `analyzers/coverage_analyzer.rb:8-10`,
+  `coverage_analyzer.rb:20-28`
+- `Finding#<=>` compares severity rank only: `lib/wild_permission_analyzer/models/finding.rb:19-21`,
+  ranks at `:7`
+- Frozen collections: `models/capability.rb:12-13`, `models/grant.rb:10-11`,
+  `models/audit_report.rb:11-12`, `models/coverage_report.rb:11-13`
+
+**Invariants**
+
+- INV-1 read-only: `capabilities_loader.rb:25`, `grants_loader.rb:25` are the only file calls in `lib/`
+- INV-2 no execution: grep over `lib/` for `system`, `exec`, `spawn`, `Open3`, `eval`, backticks,
+  `%x` returns zero hits
+- INV-3 no network: grep over `lib/` for `Net::HTTP`, `URI.open`, `Socket` returns zero hits
+- INV-4 safe YAML: `capabilities_loader.rb:26`, `grants_loader.rb:26`
+- INV-5 structure raises, entries skip: raises at `capabilities_loader.rb:27-37` and
+  `grants_loader.rb:27-37`; entry skips at `capabilities_loader.rb:43` and `grants_loader.rb:42-45`
+- INV-6 frozen configuration: `freeze!` called at the end of `configure` in
+  `lib/wild_permission_analyzer.rb:35-38`, defined at `configuration.rb:62-65`; `FrozenError` raised
+  by `check_frozen!` at `configuration.rb:69-71`; `reset_configuration!` defined at
+  `lib/wild_permission_analyzer.rb:40-42` and called only from `spec/spec_helper.rb:26`
+- INV-7 zero runtime dependencies beyond stdlib: `wild-permission-analyzer.gemspec:25` plus the
+  stdlib-only require list under defect class 7
+- INV-8 severity ordering: `models/audit_report.rb:11` sorts, `models/finding.rb:19-21` makes that
+  sort most severe first
+- INV-9 deterministic output: `generated_at` is the only clock read, `models/audit_report.rb:10`;
+  `Date.today` appears only in `models/grant.rb:22`, and `expired?` is called from no analyzer
+  (grep for `expired?` over `lib/` returns only its definition)
+- INV-10 bounded traversal: `prerequisite_analyzer.rb:54`
+
+**Fail closed**
+
+- `LoadError` instead of an empty report: `capabilities_loader.rb:27-37`, `grants_loader.rb:27-37`,
+  error class at `lib/wild_permission_analyzer/errors.rb:6`
+- `Grant#expired?` returns `false` on an unparseable date, the named fail-open branch:
+  `models/grant.rb:19-25`, rescue at `:23-24`
+
+**Generated, ignored, and historical files**
+
+- Ignored build output: `.gitignore:3`, `.gitignore:5-10`
+- `planning/` pre-implementation notes: `planning/epics.md`, `planning/notes.md`, `planning/roadmap.md`
+- Numbered doc set and its index: `000-docs/000-INDEX.md:1-20`
+- AD-1 six analyzers: `000-docs/004-AT-ADEC-architecture-decisions.md:8`
+- AD-3 severity ordering via Comparable: `000-docs/004-AT-ADEC-architecture-decisions.md:28`
+- AD-4 loaders raise on structure, skip on entries: `000-docs/004-AT-ADEC-architecture-decisions.md:38`
+- Safety model doc: `000-docs/003-TQ-STND-safety-model.md`
+- Keep a Changelog format: `CHANGELOG.md:5`
+
+**Corrected during this verification pass**
+
+- Defect class 8 previously said findings copy grant `context` into JSON and Markdown. They do not.
+  `grant.context` is loaded at `grants_loader.rb:50` and frozen at `models/grant.rb:11`, and no
+  analyzer puts it in a `Finding#evidence` hash. The rule is preventive, and the text now says so.
+- Defect class 7 previously said the gemspec declares stdlib `yaml` only and that any
+  `spec.add_dependency` is a defect. The gemspec already carries one, at
+  `wild-permission-analyzer.gemspec:25`. Read literally the old rule flagged existing code, so it
+  now reads any *additional* dependency.

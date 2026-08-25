@@ -13,8 +13,8 @@ name: 'MiniMax Code Review'
 #      exactly the claims that hide a silently narrowed audit.
 #
 # REVIEW.md at the repo root is the repository's reviewer law; both prompts below are
-# distillations of it for a diff-scoped reviewer. The action fetches the PR diff via
-# the API and never checks out or executes PR code.
+# distillations of it for a diff-scoped reviewer. This workflow has no checkout step,
+# so no pull-request code is fetched or executed in either job.
 #
 # ADVISORY ONLY. Neither lane is a required check and neither may gate a merge. The
 # deterministic gate stays ci.yml (rspec + rubocop on Ruby 3.2 and 3.3). If a lane
@@ -118,15 +118,17 @@ jobs:
             PrerequisiteAnalyzer#detect_cycle recurses bounded only by
             max_prerequisite_depth; removing that guard turns a deep chain into a
             SystemStackError. Any new config-driven traversal needs a bound. (7) NEW
-            RUNTIME DEPENDENCIES: the gemspec declares stdlib yaml only, so any
-            add_dependency or non-stdlib require under lib/ is a defect (note
+            RUNTIME DEPENDENCIES: the gemspec declares exactly one dependency, the
+            default gem yaml, so any additional add_dependency or any non-stdlib require
+            under lib/ is a defect (note
             Grant#expired? calls Date.parse while nothing in lib/ requires date: the fix
             is require date, not a gem). (8) REPORT LEAKAGE AND OUTPUT INJECTION:
-            findings copy caller_id, capability names and grant context out of audited
-            YAML into JSON and Markdown that land in CI artifacts and PR comments. Flag
-            serializing grant.context wholesale, and flag interpolating a config string
-            into Markdown cells or fences without neutralizing pipes, backticks and
-            newlines. (9) ORDINARY CORRECTNESS: coverage-ratio math, caller_id grouping,
+            findings copy caller_id, capability names, risk levels and tags out of
+            audited YAML into Finding#evidence, which JsonExporter serializes wholesale.
+            Grant context is loaded onto Grant but reaches no finding today, so flag any
+            change that starts serializing grant.context. MarkdownExporter#escape_md
+            neutralizes pipes and backticks but not newlines, so flag a config string
+            interpolated into a Markdown cell or fence without all three neutralized. (9) ORDINARY CORRECTNESS: coverage-ratio math, caller_id grouping,
             Finding#<=> comparing anything but severity rank (callers rely on
             critical-first ordering), mutation of frozen collections, specs that assert
             on a mock instead of behavior. INVARIANTS THAT MUST NEVER REGRESS: read-only
