@@ -2,7 +2,6 @@
 *.db
 .beads/
 AGENTS.md
-Gemfile.lock
 vendor/bundle/
 .bundle/
 pkg/
